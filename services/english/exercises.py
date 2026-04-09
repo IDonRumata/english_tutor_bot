@@ -54,46 +54,48 @@ def _levenshtein(a: str, b: str) -> int:
 
 # ─────────────────── Генераторы ───────────────────
 
-async def gen_translate_to_en(unit_id: int) -> dict | None:
-    """RU → EN: Андрей видит русский, голосом говорит/пишет английский чанк."""
-    chunks = await db.en_get_chunks_by_unit(unit_id, limit=200)
-    chunks = [c for c in chunks if c.get("translation_ru")]
-    if not chunks:
-        return None
-    c = random.choice(chunks)
-    # Проверяем по ЧАНКУ (ключевой фразе), не по полному предложению.
-    # Полное предложение — только как образец в фидбеке.
+def _make_translate(c: dict) -> dict:
     ru_prompt = c.get("example_ru") or c["translation_ru"]
     example_en = c.get("example_en") or ""
     return {
         "type": "translate_to_en",
-        "prompt_text": f"«{ru_prompt}»",  # без "Скажи по-английски" — он в заголовке
-        "expected_answer": c["chunk"],    # проверяем только ключевой чанк
-        "example_en": example_en,         # полное предложение-образец для фидбека
-        "hint": c["chunk"],
+        "prompt_text": f"«{ru_prompt}»",
+        "expected_answer": c["chunk"],
+        "example_en": example_en,
+        # Подсказка: только первое слово чанка — не выдаём ответ целиком
+        "hint": c["chunk"].split()[0] if c["chunk"] else "",
         "chunk_id": c["id"],
         "source": "outcomes_elem",
     }
 
 
-async def gen_chunk_drill(unit_id: int) -> dict | None:
-    """Shadowing: бот произносит, Андрей повторяет."""
-    chunks = await db.en_get_chunks_by_unit(unit_id, limit=200)
-    if not chunks:
-        return None
-    c = random.choice(chunks)
-    # Для озвучки используем example_en (натуральное предложение) или сам чанк
+def _make_drill(c: dict) -> dict:
     voice_text = c.get("example_en") or c["chunk"]
     return {
         "type": "chunk_drill",
-        "prompt_text": voice_text,          # что озвучивается и повторяется
-        "chunk": c["chunk"],                 # ключевая фраза
-        "translation": c.get("translation_ru"),  # перевод ключевой фразы
+        "prompt_text": voice_text,
+        "chunk": c["chunk"],
+        "translation": c.get("translation_ru"),
         "prompt_audio_path": c.get("example_audio_path") or c.get("audio_path"),
         "expected_answer": voice_text,
         "chunk_id": c["id"],
         "source": "outcomes_elem",
     }
+
+
+async def gen_translate_to_en(unit_id: int) -> dict | None:
+    chunks = await db.en_get_chunks_by_unit(unit_id, limit=200)
+    chunks = [c for c in chunks if c.get("translation_ru")]
+    if not chunks:
+        return None
+    return _make_translate(random.choice(chunks))
+
+
+async def gen_chunk_drill(unit_id: int) -> dict | None:
+    chunks = await db.en_get_chunks_by_unit(unit_id, limit=200)
+    if not chunks:
+        return None
+    return _make_drill(random.choice(chunks))
 
 
 async def gen_gap_fill(unit_id: int) -> dict | None:
@@ -142,21 +144,32 @@ EXERCISE_GENERATORS = {
 
 
 async def build_block(unit_id: int, n: int = 6) -> list[dict]:
-    """Собрать упражнения для одного блока (~10 мин). Interleaving по типам.
-    gap_fill отключён — OCR-данные из Workbook некачественные."""
-    types_order = ["drill", "translate", "drill", "translate", "drill", "translate"]
+    """Собрать упражнения для одного блока (~10 мин).
+    Interleaving drill/translate без повторения одного чанка дважды."""
+    all_chunks = await db.en_get_chunks_by_unit(unit_id, limit=200)
+    if not all_chunks:
+        return []
+
+    random.shuffle(all_chunks)
+    translate_pool = [c for c in all_chunks if c.get("translation_ru")]
+    drill_pool = list(all_chunks)  # drill работает с любым чанком
+
+    # Если чанков меньше чем нужно упражнений — допускаем повторы
+    if len(all_chunks) < n:
+        translate_pool = translate_pool * (n // max(len(translate_pool), 1) + 1)
+        drill_pool = drill_pool * (n // max(len(drill_pool), 1) + 1)
+        random.shuffle(translate_pool)
+        random.shuffle(drill_pool)
+
     block = []
+    ti = di = 0
+    types_order = ["drill", "translate", "drill", "translate", "drill", "translate"]
     for t in types_order[:n]:
-        gen = EXERCISE_GENERATORS[t]
-        ex = await gen(unit_id)
-        if ex:
-            block.append(ex)
-    # Если упражнений из одного типа нет — заполнить из других
-    if len(block) < n:
-        for t in EXERCISE_GENERATORS:
-            while len(block) < n:
-                ex = await EXERCISE_GENERATORS[t](unit_id)
-                if not ex:
-                    break
-                block.append(ex)
+        if t == "translate" and ti < len(translate_pool):
+            block.append(_make_translate(translate_pool[ti]))
+            ti += 1
+        elif t == "drill" and di < len(drill_pool):
+            block.append(_make_drill(drill_pool[di]))
+            di += 1
+
     return block[:n]
