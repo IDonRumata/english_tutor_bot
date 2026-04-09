@@ -510,10 +510,13 @@ async def _show_exercise(message: Message, state: FSMContext):
     try:
         if ex["type"] == "chunk_drill":
             prompt = _h(ex['prompt_text'])
+            chunk = _h(ex.get('chunk') or ex['prompt_text'])
             translation = _h(ex.get('translation') or '')
+            # Показываем: предложение для shadowing + ключевая фраза с переводом
+            phrase_line = f"\n\n📌 <i>{chunk}</i> — <i>{translation}</i>" if translation else ""
             await _send_with_audio(
                 message,
-                f"{header}\n\n🔁 <b>Shadowing</b>\nПовтори вслух за голосом:\n\n<b>{prompt}</b>\n\n<i>{translation}</i>",
+                f"{header}\n\n🔁 <b>Shadowing</b>\nПовтори вслух за голосом:\n\n<b>{prompt}</b>{phrase_line}",
                 voice_text=ex["prompt_text"],
             )
             await message.answer("Когда повторил — отправь любое сообщение или /next.", parse_mode="HTML")

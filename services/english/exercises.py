@@ -82,18 +82,15 @@ async def gen_chunk_drill(unit_id: int) -> dict | None:
     if not chunks:
         return None
     c = random.choice(chunks)
-    use_example = bool(c.get("example_en"))
-    text = c["example_en"] if use_example else c["chunk"]
-    # Перевод должен соответствовать показанному тексту:
-    # если показываем пример-предложение — берём example_ru,
-    # если только чанк — берём translation_ru
-    translation = (c.get("example_ru") or c.get("translation_ru")) if use_example else c.get("translation_ru")
+    # Для озвучки используем example_en (натуральное предложение) или сам чанк
+    voice_text = c.get("example_en") or c["chunk"]
     return {
         "type": "chunk_drill",
-        "prompt_text": text,
+        "prompt_text": voice_text,          # что озвучивается и повторяется
+        "chunk": c["chunk"],                 # ключевая фраза
+        "translation": c.get("translation_ru"),  # перевод ключевой фразы
         "prompt_audio_path": c.get("example_audio_path") or c.get("audio_path"),
-        "expected_answer": text,
-        "translation": translation,
+        "expected_answer": voice_text,
         "chunk_id": c["id"],
         "source": "outcomes_elem",
     }
