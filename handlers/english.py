@@ -90,6 +90,41 @@ def _strip_markdown(text: str) -> str:
     return text.replace("*", "").replace("_", "").replace("`", "").replace("«", "").replace("»", "")
 
 
+def md(text: str) -> str:
+    """
+    Преобразовать markdown-подобную разметку в безопасный HTML для Telegram.
+    Поддерживаемые маркеры:
+      *bold*          → <b>bold</b>
+      `code`          → <code>code</code>
+      _italic_        → <i>italic</i>   (только парные внутри слова/текста)
+    Весь остальной контент экранируется, чтобы '<', '>', '&' не ломали парсер.
+    Команды вида /en_unit не ломаются — нет парного _.
+    """
+    import re
+    from html import escape
+
+    # Токенизируем по *...*, `...`, и _..._ (ленивый матч)
+    pattern = re.compile(r"(\*[^*\n]+?\*|`[^`\n]+?`|_[^_\n]+?_)")
+    result = []
+    last_end = 0
+    for m in pattern.finditer(text):
+        # Обычный текст до токена — экранируем
+        if m.start() > last_end:
+            result.append(escape(text[last_end:m.start()]))
+        tok = m.group(0)
+        inner = tok[1:-1]
+        if tok.startswith("*"):
+            result.append(f"<b>{escape(inner)}</b>")
+        elif tok.startswith("`"):
+            result.append(f"<code>{escape(inner)}</code>")
+        elif tok.startswith("_"):
+            result.append(f"<i>{escape(inner)}</i>")
+        last_end = m.end()
+    if last_end < len(text):
+        result.append(escape(text[last_end:]))
+    return "".join(result)
+
+
 # ─────────────────── Главное меню ───────────────────
 
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -123,7 +158,7 @@ async def cmd_english_menu(message: Message):
         f"{stats['content']['sentences']} предложений, "
         f"{stats['content']['exercises']} упражнений_"
     )
-    await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
+    await message.answer(md(text), parse_mode="HTML", reply_markup=main_menu_kb())
 
 
 @router.callback_query(F.data == "en:menu")
@@ -140,13 +175,13 @@ async def cmd_en_unit(message: Message):
     if len(parts) < 2 or not parts[1].isdigit():
         units = await db.en_list_units()
         if not units:
-            await message.answer("База юнитов пустая. Запусти `python -m scripts.ingest_outcomes` на VPS.", parse_mode="Markdown")
+            await message.answer(md("База юнитов пустая. Запусти `python -m scripts.ingest_outcomes` на VPS."), parse_mode="HTML")
             return
         lines = ["📚 *Доступные юниты Outcomes Elementary:*\n"]
         for u in units:
             lines.append(f"{u['number']:>2}. {u['title']} _({u['cefr']})_")
         lines.append("\nУстановить: `/en_unit 3`")
-        await message.answer("\n".join(lines), parse_mode="Markdown")
+        await message.answer(md("\n".join(lines)), parse_mode="HTML")
         return
 
     num = int(parts[1])
@@ -159,11 +194,13 @@ async def cmd_en_unit(message: Message):
     # Залить чанки юнита в SRS
     added = await srs.bulk_add_unit_chunks(message.from_user.id, unit["id"], limit=20)
     await message.answer(
-        f"✅ Текущий юнит: *Unit {num} — {unit['title']}*\n"
-        f"Тема: {unit['topic']}\n"
-        f"Добавлено в SRS: *{added}* чанков\n\n"
-        f"Готов начать? /en_block",
-        parse_mode="Markdown",
+        md(
+            f"✅ Текущий юнит: *Unit {num} — {unit['title']}*\n"
+            f"Тема: {unit['topic']}\n"
+            f"Добавлено в SRS: *{added}* чанков\n\n"
+            f"Готов начать? /en_block"
+        ),
+        parse_mode="HTML",
     )
 
 
@@ -180,19 +217,21 @@ async def cmd_en_voice(message: Message):
     }
     if len(parts) < 2 or parts[1] not in voices:
         await message.answer(
-            "Доступные голоса:\n"
-            "`/en_voice uk_f` — британский ж (Sonia) — *по умолчанию*\n"
-            "`/en_voice uk_m` — британский м (Ryan)\n"
-            "`/en_voice us_f` — американский ж (Aria)\n"
-            "`/en_voice us_m` — американский м (Guy)",
-            parse_mode="Markdown",
+            md(
+                "Доступные голоса:\n"
+                "`/en_voice uk_f` — британский ж (Sonia) — *по умолчанию*\n"
+                "`/en_voice uk_m` — британский м (Ryan)\n"
+                "`/en_voice us_f` — американский ж (Aria)\n"
+                "`/en_voice us_m` — американский м (Guy)"
+            ),
+            parse_mode="HTML",
         )
         return
     voice = voices[parts[1]]
     await db.en_update_profile(message.from_user.id, tts_voice=voice)
     # Замечание: services/english/tts.py читает config.EN_TTS_VOICE_MAIN. Профиль перезаписывается
     # глобально, потому что у нас один пользователь сейчас. При мультитенантности — читать профиль.
-    await message.answer(f"✅ Голос обновлён: `{voice}`\nПерезапусти бота, чтобы применить.", parse_mode="Markdown")
+    await message.answer(md(f"✅ Голос обновлён: `{voice}`\nПерезапусти бота, чтобы применить."), parse_mode="HTML")
 
 
 # ─────────────────── /en_start (placement test) ───────────────────
@@ -201,13 +240,15 @@ async def cmd_en_voice(message: Message):
 async def cmd_en_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🎓 *Placement Test — оценка уровня*\n\n"
-        "Три части, ~10 минут:\n"
-        "1️⃣ Словарь — 10 слов с inline-кнопками\n"
-        "2️⃣ Грамматика — 10 вопросов с вариантами\n"
-        "3️⃣ Speaking — 1 голосовой ответ\n\n"
-        "Поехали 👇",
-        parse_mode="Markdown",
+        md(
+            "🎓 *Placement Test — оценка уровня*\n\n"
+            "Три части, ~10 минут:\n"
+            "1️⃣ Словарь — 10 слов с inline-кнопками\n"
+            "2️⃣ Грамматика — 10 вопросов с вариантами\n"
+            "3️⃣ Speaking — 1 голосовой ответ\n\n"
+            "Поехали 👇"
+        ),
+        parse_mode="HTML",
     )
 
     # Берём 10 слов из placement vocab (рандомно из 25)
@@ -236,8 +277,8 @@ async def _ask_placement_vocab(message: Message, state: FSMContext):
 
     await state.update_data(current_options=options, current_correct=correct_translation)
     await message.answer(
-        f"*{idx + 1}/{len(queue)}*\nКак переводится: *{word}*?",
-        parse_mode="Markdown", reply_markup=kb,
+        md(f"*{idx + 1}/{len(queue)}*\nКак переводится: *{word}*?"),
+        parse_mode="HTML", reply_markup=kb,
     )
 
 
@@ -255,7 +296,7 @@ async def cb_placement_vocab(cb: CallbackQuery, state: FSMContext):
         is_correct = chosen == correct
 
     feedback = "✅" if is_correct else f"❌ Правильно: *{correct}*"
-    await cb.message.edit_text(f"{cb.message.text}\n\nТы выбрал: {chosen}\n{feedback}", parse_mode="Markdown")
+    await cb.message.edit_text(md(f"{cb.message.text}\n\nТы выбрал: {chosen}\n{feedback}"), parse_mode="HTML")
     await state.update_data(
         vocab_idx=data["vocab_idx"] + 1,
         vocab_correct=data["vocab_correct"] + (1 if is_correct else 0),
@@ -268,7 +309,7 @@ async def _start_placement_grammar(message: Message, state: FSMContext):
     grammar_sample = random.sample(assessment.PLACEMENT_GRAMMAR, 10)
     await state.update_data(gram_queue=grammar_sample, gram_idx=0, gram_correct=0)
     await state.set_state(PlacementFSM.grammar)
-    await message.answer("📐 *Часть 2 — Грамматика*", parse_mode="Markdown")
+    await message.answer(md("📐 *Часть 2 — Грамматика*"), parse_mode="HTML")
     await _ask_placement_grammar(message, state)
 
 
@@ -429,15 +470,17 @@ async def cmd_en_block(message: Message, state: FSMContext):
     profile = await db.en_get_or_create_profile(message.from_user.id)
     unit = await db.en_get_unit_by_number(profile.get("current_unit") or 1)
     if not unit:
-        await message.answer("Сначала задай юнит: `/en_unit 1`", parse_mode="Markdown")
+        await message.answer(md("Сначала задай юнит: `/en_unit 1`"), parse_mode="HTML")
         return
 
     block = await exercises.build_block(unit["id"], n=6)
     if not block:
         await message.answer(
-            f"В юните {unit['number']} '{unit['title']}' нет материала.\n"
-            "Запусти `python -m scripts.ingest_outcomes` на VPS, чтобы загрузить контент.",
-            parse_mode="Markdown",
+            md(
+                f"В юните {unit['number']} '{unit['title']}' нет материала.\n"
+                "Запусти `python -m scripts.ingest_outcomes` на VPS, чтобы загрузить контент."
+            ),
+            parse_mode="HTML",
         )
         return
 
@@ -620,14 +663,14 @@ async def _finish_block(message: Message, state: FSMContext):
 async def cmd_en_review(message: Message):
     items = await srs.get_due(message.from_user.id, limit=10)
     if not items:
-        await message.answer("🎉 На сегодня повторений нет. /en_block — новый материал.", parse_mode="Markdown")
+        await message.answer(md("🎉 На сегодня повторений нет. /en_block — новый материал."), parse_mode="HTML")
         return
 
     lines = [f"🔄 *На повторение:* {len(items)}\n"]
     for it in items:
         lines.append(f"• *{it['chunk']}* — {it.get('translation_ru') or '?'}")
     lines.append("\nДля интерактивного теста — /en_block")
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    await message.answer(md("\n".join(lines)), parse_mode="HTML")
 
 
 # ─────────────────── /en_speak — speaking practice ───────────────────
@@ -677,7 +720,7 @@ async def speak_answer(message: Message, state: FSMContext):
         await message.answer("Не разобрал. Попробуй ещё раз.")
         return
 
-    await message.answer(f"📝 Распознано: _{text}_\n\n🤖 Оцениваю...", parse_mode="Markdown")
+    await message.answer(md(f"📝 Распознано: _{text}_\n\n🤖 Оцениваю..."), parse_mode="HTML")
     data = await state.get_data()
     eval_result = await speaking_eval.evaluate(data["question"], text)
     score = speaking_eval.overall_score(eval_result)
@@ -693,10 +736,12 @@ async def speak_answer(message: Message, state: FSMContext):
         f"Grammar: {eval_result.get('grammar',0)}/5\n"
         f"Vocabulary: {eval_result.get('vocabulary',0)}/5\n"
         f"Task: {eval_result.get('task_completion',0)}/5\n"
-        f"📊 Overall: *{score:.0f}/100* ({eval_result.get('cefr','?')})\n\n"
-        f"💬 {eval_result.get('feedback_ru','')}\n\n"
-        f"Исправлено:\n_{eval_result.get('corrected','')}_",
-        parse_mode="Markdown",
+        md(
+            f"📊 Overall: *{score:.0f}/100* ({eval_result.get('cefr','?')})\n\n"
+            f"💬 {eval_result.get('feedback_ru','')}\n\n"
+            f"Исправлено:\n_{eval_result.get('corrected','')}_"
+        ),
+        parse_mode="HTML",
     )
     await state.clear()
 
@@ -710,10 +755,12 @@ async def cmd_en_lesson(message: Message, state: FSMContext):
         "📝 *Отчёт с урока*\n\n"
         "Расскажи (текстом или голосом):\n"
         "• Что прошли — тема, грамматика\n"
-        "• Какие новые слова/фразы\n"
-        "• Что задал учитель на ДЗ\n\n"
-        "Я разберу и сохраню. /cancel — отмена",
-        parse_mode="Markdown",
+        md(
+            "• Какие новые слова/фразы\n"
+            "• Что задал учитель на ДЗ\n\n"
+            "Я разберу и сохраню. /cancel — отмена"
+        ),
+        parse_mode="HTML",
     )
 
 
@@ -781,13 +828,13 @@ async def _process_lesson_report(message: Message, state: FSMContext, text: str)
             hw_added += 1
 
     await message.answer(
-        f"✅ *Отчёт сохранён*\n\n"
+        md(f"✅ *Отчёт сохранён*\n\n"
         f"Тема: *{parsed.get('topic','—')}*\n"
         f"Грамматика: {', '.join(parsed.get('grammar', [])) or '—'}\n"
         f"Новых чанков в SRS: *{chunks_added}*\n"
         f"Домашка: *{hw_added}*\n\n"
-        f"Посмотреть ДЗ: /en_homework",
-        parse_mode="Markdown",
+        f"Посмотреть ДЗ: /en_homework"),
+        parse_mode="HTML",
     )
     await state.clear()
 
@@ -805,14 +852,14 @@ async def cmd_en_homework(message: Message):
         deadline = f" _до {hw['deadline']}_" if hw.get("deadline") else ""
         lines.append(f"#{hw['id']} {hw['description']}{deadline}")
     lines.append("\nОтметить выполненной: `/en_hw_done ID`")
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    await message.answer(md("\n".join(lines)), parse_mode="HTML")
 
 
 @router.message(Command("en_hw_done"))
 async def cmd_en_hw_done(message: Message):
     parts = (message.text or "").split()
     if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Формат: `/en_hw_done ID`", parse_mode="Markdown")
+        await message.answer(md("Формат: `/en_hw_done ID`"), parse_mode="HTML")
         return
     await db.en_complete_homework(int(parts[1]))
     await message.answer("✅ ДЗ закрыто.")
@@ -829,7 +876,7 @@ async def cmd_en_progress(message: Message):
     bar = "▓" * (int(pct) // 10) + "░" * (10 - int(pct) // 10)
 
     await message.answer(
-        f"📊 *Прогресс English*\n\n"
+        md(f"📊 *Прогресс English*\n\n"
         f"🎯 Уровень: *{p['cefr_level']}*\n"
         f"📚 Текущий юнит: {p.get('current_unit', '—')}\n"
         f"🔥 Streak: {p.get('streak_days', 0)} дн\n\n"
@@ -844,8 +891,8 @@ async def cmd_en_progress(message: Message):
         f"📖 Контент в БД:\n"
         f"  Чанков: {stats['content']['chunks']}\n"
         f"  Предложений: {stats['content']['sentences']}\n"
-        f"  Упражнений: {stats['content']['exercises']}",
-        parse_mode="Markdown",
+        f"  Упражнений: {stats['content']['exercises']}"),
+        parse_mode="HTML",
     )
 
 
@@ -855,19 +902,19 @@ async def cmd_en_progress(message: Message):
 async def cmd_en_grammar(message: Message):
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Формат: `/en_grammar past simple`", parse_mode="Markdown")
+        await message.answer(md("Формат: `/en_grammar past simple`"), parse_mode="HTML")
         return
     topic = parts[1]
     g = await db.en_find_grammar(topic)
     if not g:
         # Fallback: спросим Sonnet (с кешем)
-        await message.answer(f"Объясняю: *{topic}*...", parse_mode="Markdown")
+        await message.answer(md(f"Объясняю: *{topic}*..."), parse_mode="HTML")
         response = await ask_claude(
             f"Объясни грамматическое правило English '{topic}' простым языком для русскоязычного "
             f"уровня A1-A2. Краткие примеры. Макс 250 слов.",
             tier="sonnet", use_history=False, use_cache=True,
         )
-        await message.answer(response, parse_mode="Markdown")
+        await message.answer(md(response), parse_mode="HTML")
         return
 
     text = f"📐 *{g['topic']}*\n\n{g.get('rule_ru','')}\n"
@@ -878,7 +925,7 @@ async def cmd_en_grammar(message: Message):
                 text += "\nПримеры:\n" + "\n".join(f"• {e}" for e in ex_list)
         except (json.JSONDecodeError, TypeError):
             pass
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(md(text), parse_mode="HTML")
 
 
 # ─────────────────── Callback handlers для меню ───────────────────
@@ -928,11 +975,11 @@ async def cb_progress(cb: CallbackQuery):
 @router.callback_query(F.data == "en:settings")
 async def cb_settings(cb: CallbackQuery):
     await cb.message.answer(
-        "⚙️ *Настройки English*\n\n"
+        md("⚙️ *Настройки English*\n\n"
         "`/en_voice uk_f` — голос TTS\n"
         "`/en_unit N` — текущий юнит\n"
-        "`/en_start` — пересдать тест уровня",
-        parse_mode="Markdown",
+        "`/en_start` — пересдать тест уровня"),
+        parse_mode="HTML",
     )
     await cb.answer()
 
@@ -945,8 +992,8 @@ async def cmd_vocab(message: Message):
     args = (message.text or "").replace("/vocab", "").strip()
     if not args:
         await message.answer(
-            "Добавить:\n`/vocab achieve — достичь`\n\nНайти:\n`/vocab achieve`",
-            parse_mode="Markdown",
+            md("Добавить:\n`/vocab achieve — достичь`\n\nНайти:\n`/vocab achieve`"),
+            parse_mode="HTML",
         )
         return
     sep = next((s for s in ["—", " - ", "="] if s in args), None)
@@ -957,7 +1004,7 @@ async def cmd_vocab(message: Message):
             type="word", source="user",
         )
         await srs.add_to_srs(message.from_user.id, cid, "passive")
-        await message.answer(f"✅ *{word}* — {translation}\nДобавлено в SRS.", parse_mode="Markdown")
+        await message.answer(md(f"✅ *{word}* — {translation}\nДобавлено в SRS."), parse_mode="HTML")
     else:
         # Поиск
         async with __import__("aiosqlite").connect(config.DB_PATH) as conn:
@@ -968,13 +1015,13 @@ async def cmd_vocab(message: Message):
             )
             row = await cursor.fetchone()
         if row:
-            await message.answer(f"📖 *{row['chunk']}* — {row['translation_ru'] or '?'}", parse_mode="Markdown")
+            await message.answer(md(f"📖 *{row['chunk']}* — {row['translation_ru'] or '?'}"), parse_mode="HTML")
         else:
             response = await ask_claude(
                 f"Переведи слово/фразу на русский (1-2 слова): '{args}'",
                 tier="haiku", use_history=False, use_cache=True,
             )
-            await message.answer(f"📖 *{args}* — {response}\n\nСохранить: `/vocab {args} — {response}`", parse_mode="Markdown")
+            await message.answer(md(f"📖 *{args}* — {response}\n\nСохранить: `/vocab {args} — {response}`"), parse_mode="HTML")
 
 
 # ─────────────────── Legacy: интеграция с роутером голоса ───────────────────
@@ -995,7 +1042,7 @@ async def handle_english_voice(message: Message, text: str, prefix: str = ""):
                         type="word", source="user",
                     )
                     await srs.add_to_srs(message.from_user.id, cid, "passive")
-                    await message.answer(f"{prefix}✅ *{word}* — {translation.strip()}", parse_mode="Markdown")
+                    await message.answer(md(f"{prefix}✅ *{word}* — {translation.strip()}"), parse_mode="HTML")
                     return
     if "переводится" in text_lower or "что значит" in text_lower:
         for kw in ["как переводится", "что значит", "переведи", "перевод"]:
@@ -1007,7 +1054,7 @@ async def handle_english_voice(message: Message, text: str, prefix: str = ""):
         f"Вопрос об английском от Андрея (уровень A1-A2): {text}\nОтвечай по-русски, кратко.",
         tier="sonnet", use_history=False, use_cache=True,
     )
-    await message.answer(f"{prefix}{response}", parse_mode="Markdown")
+    await message.answer(md(f"{prefix}{response}"), parse_mode="HTML")
 
 
 def is_english_message(text: str) -> bool:
