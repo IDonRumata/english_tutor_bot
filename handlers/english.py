@@ -731,12 +731,12 @@ async def speak_answer(message: Message, state: FSMContext):
         speaking_score=score,
     )
     await message.answer(
-        f"🎯 *Оценка:*\n\n"
-        f"Fluency: {eval_result.get('fluency',0)}/5\n"
-        f"Grammar: {eval_result.get('grammar',0)}/5\n"
-        f"Vocabulary: {eval_result.get('vocabulary',0)}/5\n"
-        f"Task: {eval_result.get('task_completion',0)}/5\n"
         md(
+            f"🎯 *Оценка:*\n\n"
+            f"Fluency: {eval_result.get('fluency',0)}/5\n"
+            f"Grammar: {eval_result.get('grammar',0)}/5\n"
+            f"Vocabulary: {eval_result.get('vocabulary',0)}/5\n"
+            f"Task: {eval_result.get('task_completion',0)}/5\n"
             f"📊 Overall: *{score:.0f}/100* ({eval_result.get('cefr','?')})\n\n"
             f"💬 {eval_result.get('feedback_ru','')}\n\n"
             f"Исправлено:\n_{eval_result.get('corrected','')}_"
@@ -752,14 +752,12 @@ async def speak_answer(message: Message, state: FSMContext):
 async def cmd_en_lesson(message: Message, state: FSMContext):
     await state.set_state(LessonFSM.awaiting_report)
     await message.answer(
-        "📝 *Отчёт с урока*\n\n"
+        md("📝 *Отчёт с урока*\n\n"
         "Расскажи (текстом или голосом):\n"
         "• Что прошли — тема, грамматика\n"
-        md(
-            "• Какие новые слова/фразы\n"
-            "• Что задал учитель на ДЗ\n\n"
-            "Я разберу и сохраню. /cancel — отмена"
-        ),
+        "• Какие новые слова/фразы\n"
+        "• Что задал учитель на ДЗ\n\n"
+        "Я разберу и сохраню. /cancel — отмена"),
         parse_mode="HTML",
     )
 
